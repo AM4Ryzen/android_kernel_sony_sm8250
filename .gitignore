@@ -144,3 +144,8 @@ out/
 
 # build.txt generated
 build.txt
+
+#
+#Ignoring Android.bp link file
+#
+Android.bp
