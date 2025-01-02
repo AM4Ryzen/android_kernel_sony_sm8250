@@ -358,9 +358,12 @@ static void *usbpd_ipc_log;
 static const u32 default_src_caps[] = { 0x3601905A };	/* VSafe5V @ 0.9A */
 #endif
 #if defined(CONFIG_SOMC_CHARGER_EXTENSION)
-static const u32 somc_default_src_caps[] = { 0x3601905A }; /* 5V @ 0.9A */
-static const u32 somc_minimum_src_caps[] = { 0x3601900A }; /* 5V @ 0.1A */
-static u32 default_src_caps[] = { 0x3601905A };	/* VSafe5V @ 0.9A */
+#define SOMC_SOURCE_CAP_1500MA 0x36019096
+#define SOMC_SOURCE_CAP_900MA 0x3601905A
+#define SOMC_SOURCE_CAP_100MA 0x3601900A
+static u32 somc_default_src_caps[] = { SOMC_SOURCE_CAP_900MA };
+static const u32 somc_minimum_src_caps[] = { SOMC_SOURCE_CAP_100MA };
+static u32 default_src_caps[] = { SOMC_SOURCE_CAP_900MA };
 #endif
 static const u32 default_snk_caps[] = { 0x2601912C };	/* VSafe5V @ 3A */
 
@@ -2205,7 +2208,8 @@ static void enter_state_src_startup(struct usbpd *pd)
 	val.intval = 1; /* Rp-1.5A; SinkTxNG for PD 3.0 */
 #endif
 #if defined(CONFIG_SOMC_CHARGER_EXTENSION)
-	if (pd->in_explicit_contract) {
+	if (pd->in_explicit_contract ||
+		default_src_caps[0] == SOMC_SOURCE_CAP_1500MA) {
 		val.intval = 1; /* Rp-1.5A; SinkTxNG for PD 3.0 */
 	} else {
 		val.intval = 0; /* Rp-Default; */
@@ -4905,6 +4909,22 @@ struct usbpd *usbpd_create(struct device *parent)
 				sizeof(default_snk_caps));
 		pd->num_sink_caps = ARRAY_SIZE(default_snk_caps);
 	}
+
+#if defined(CONFIG_SOMC_CHARGER_EXTENSION)
+	/* set specific default_src_caps if exist */
+	ret = device_property_read_u32_array(parent,
+					"somc,default-source-cap", NULL, 0);
+	if (ret > 0)
+		ret = device_property_read_u32_array(parent,
+					"somc,default-source-cap",
+					somc_default_src_caps, 1);
+
+	usbpd_info(&pd->dev, "somc,default-source-cap[0]: %08x\n",
+		somc_default_src_caps[0]);
+
+	memcpy(default_src_caps, somc_default_src_caps,
+			sizeof(default_src_caps));
+#endif
 
 	/*
 	 * Register a Type-C class instance (/sys/class/typec/portX).
