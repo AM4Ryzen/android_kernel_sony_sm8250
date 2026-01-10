@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 Sony Corporation
+ * Copyright (C) 2017 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2, as
@@ -26,7 +26,6 @@
 #include <linux/vmalloc.h>
 #include <linux/pm_runtime.h>
 #include <linux/sched/types.h>
-#include <linux/i2c.h>
 #include <cam_cci_dev.h>
 #include <sony_camera.h>
 
@@ -64,15 +63,12 @@
 
 #define SONY_CAMERA_GPIO_RESET			"SONY_CAMERA_RESET"
 #define SONY_CAMERA_GPIO_IRQ_SOF		"SONY_CAMERA_SOF"
-#define SONY_CAMERA_GPIO_VANA			"SONY_CAMERA_VANA"
-#define SONY_CAMERA_GPIO_IRQ_EXTERNAL		"SONY_CAMERA_EXTERNAL"
 
 #define SONY_CAMERA_MIPI_SWITCH			"SONY_CAMERA_SWITCH"
 
 enum sony_camera_irq_type {
 	SONY_CAMERA_IRQ_SOF_EVENT			=  1,
-	SONY_CAMERA_IRQ_EXTERNAL_EVENT			=  2,
-	SONY_CAMERA_IRQ_EVENT_MAX			=  3,
+	SONY_CAMERA_IRQ_EVENT_MAX			=  2,
 };
 
 enum sony_camera_state {
@@ -96,7 +92,6 @@ struct sony_camera_module {
 };
 
 struct sony_camera_match_id {
-	bool		enabled;
 	uint16_t	addr;
 	uint8_t		len;
 	uint16_t	expect_value;
@@ -144,7 +139,6 @@ struct sony_camera_data {
 	uint8_t				gpio_req_tbl_size;
 	bool				gpio_requested;
 	bool				has_hw_sof;
-	bool				has_hw_ext_irq;
 	// power
 	struct regulator		*cam_vdig;
 	struct regulator		*cam_vio;
@@ -182,9 +176,6 @@ struct sony_camera_data {
 	// Kernel event
 	struct mutex			command_lock;
 	uint32_t			open_count;
-	// i2c_client for External Camera
-	uint16_t			use_qup;
-	struct i2c_client		*qup_client;
 };
 
 static int dev_id;
@@ -193,11 +184,8 @@ static struct class *c = NULL;
 static uint16_t sensor_num;
 static struct platform_device *camera_device;
 static struct class *camera_device_class;
-struct i2c_client *ext_cam_client = NULL;
 
 static struct sony_camera_info camera_info[] = {
-	{
-	},
 	{
 	},
 	{
@@ -237,12 +225,6 @@ static struct sony_camera_data camera_data[] = {
 	},
 	{
 		.id = 4,
-		.thermal_sensor_temperature = { 0, 0, 0 },
-		.thermal_ret_val = -ENODEV,
-		.has_hw_sof = 0,
-	},
-	{
-		.id = 5,
 		.thermal_sensor_temperature = { 0, 0, 0 },
 		.thermal_ret_val = -ENODEV,
 		.has_hw_sof = 0,
@@ -453,13 +435,12 @@ static int sony_camera_info_init(struct platform_device *p_dev,
 
 	rc = of_property_read_u32_array(of_node, "match_id", &val_u32[0], 3);
 	if (rc < 0) {
-		camera_info[id].match_id.enabled = false;
-	} else {
-		camera_info[id].match_id.enabled = true;
-		camera_info[id].match_id.addr = val_u32[0];
-		camera_info[id].match_id.len = val_u32[1];
-		camera_info[id].match_id.expect_value = val_u32[2];
+		LOGE("%s failed %d\n", __func__, __LINE__);
+		goto fail;
 	}
+	camera_info[id].match_id.addr = val_u32[0];
+	camera_info[id].match_id.len = val_u32[1];
+	camera_info[id].match_id.expect_value = val_u32[2];
 
 	rc = of_property_read_u32(of_node, "cci-device", &val_u32[0]);
 	if (rc < 0) {
@@ -473,13 +454,6 @@ static int sony_camera_info_init(struct platform_device *p_dev,
 		camera_data[id].cci_info.cci_i2c_master = MASTER_0;
 	} else {
 		camera_data[id].cci_info.cci_i2c_master = val_u32[0];
-	}
-
-	rc = of_property_read_u32(of_node, "use_qup", &val_u32[0]);
-	if (rc < 0) {
-		camera_data[id].use_qup = 0;
-	} else {
-		camera_data[id].use_qup = val_u32[0];
 	}
 
 	rc = of_property_read_u32(of_node, "thremal_enable", &val_u32[0]);
@@ -500,13 +474,6 @@ static int sony_camera_info_init(struct platform_device *p_dev,
 		camera_data[id].has_hw_sof = 0;
 	} else {
 		camera_data[id].has_hw_sof = 1;
-	}
-
-	if (sony_camera_get_gpio_pin(&camera_data[id],
-		SONY_CAMERA_GPIO_IRQ_EXTERNAL) == NULL) {
-		camera_data[id].has_hw_ext_irq = 0;
-	} else {
-		camera_data[id].has_hw_ext_irq = 1;
 	}
 
 	count = of_property_count_strings(of_node, "module_names");
@@ -786,34 +753,26 @@ static irqreturn_t sony_camera_irq_handler(int irq, void *info)
 		goto exit;
 	}
 	desc = irq_to_desc(irq);
-	if (desc != NULL) {
-		if (!strcmp(desc->action->name, SONY_CAMERA_GPIO_IRQ_SOF)) {
-			struct sony_camera_event_data camera_event;
-			struct timespec ts;
-			unsigned long sof_lock_flags;
+	if (desc != NULL && !strcmp(desc->action->name, SONY_CAMERA_GPIO_IRQ_SOF)) {
+		struct sony_camera_event_data camera_event;
+		struct timespec ts;
+		unsigned long sof_lock_flags;
 
-			get_monotonic_boottime(&ts);
-			memset(&camera_event, 0, sizeof(camera_event));
-			spin_lock_irqsave(&camera_data->sof_lock, sof_lock_flags);
-			camera_data->sof_count++;
-			if (camera_data->sof_count > 0xFFFFFFF0)
-				camera_data->sof_count = 1;
-			camera_event.sof_data.sof_count = camera_data->sof_count;
-			spin_unlock_irqrestore(&camera_data->sof_lock, sof_lock_flags);
-			camera_event.type = SONY_CAMERA_EVT_SOF;
-			camera_event.sof_data.mono_timestamp.tv_sec = ts.tv_sec;
-			camera_event.sof_data.mono_timestamp.tv_usec = ts.tv_nsec / 1000;
-			LOGI("%s:%d sof_count = %d\n",
-				__func__, __LINE__, camera_data->sof_count);
-			sony_camera_send_event(camera_data, &camera_event);
-			return IRQ_HANDLED;
-		} else if (!strcmp(desc->action->name, SONY_CAMERA_GPIO_IRQ_EXTERNAL)) {
-			struct sony_camera_event_data camera_event;
-			memset(&camera_event, 0, sizeof(camera_event));
-			camera_event.type = SONY_CAMERA_EVT_EXTERNAL;
-			sony_camera_send_event(camera_data, &camera_event);
-			return IRQ_HANDLED;
-		}
+		get_monotonic_boottime(&ts);
+		memset(&camera_event, 0, sizeof(camera_event));
+		spin_lock_irqsave(&camera_data->sof_lock, sof_lock_flags);
+		camera_data->sof_count++;
+		if (camera_data->sof_count > 0xFFFFFFF0)
+			camera_data->sof_count = 1;
+		camera_event.sof_data.sof_count = camera_data->sof_count;
+		spin_unlock_irqrestore(&camera_data->sof_lock, sof_lock_flags);
+		camera_event.type = SONY_CAMERA_EVT_SOF;
+		camera_event.sof_data.mono_timestamp.tv_sec = ts.tv_sec;
+		camera_event.sof_data.mono_timestamp.tv_usec = ts.tv_nsec / 1000;
+		LOGI("%s:%d sof_count = %d\n",
+			__func__, __LINE__, camera_data->sof_count);
+		sony_camera_send_event(camera_data, &camera_event);
+		return IRQ_HANDLED;
 	}
 
 exit:
@@ -835,15 +794,6 @@ static int sony_camera_irq_init(
 			LOGE("regist gpio irq: %s failed\n",
 				SONY_CAMERA_GPIO_IRQ_SOF);
 	}
-	if (camera_data->has_hw_ext_irq) {
-		rc = sony_camera_regist_gpio_irq(camera_data,
-			sony_camera_irq_handler,
-			IRQF_TRIGGER_RISING | IRQF_ONESHOT,
-			SONY_CAMERA_GPIO_IRQ_EXTERNAL);
-		if (rc < 0)
-			LOGE("regist gpio irq: %s failed\n",
-				SONY_CAMERA_GPIO_IRQ_EXTERNAL);
-	}
 
 	return rc;
 }
@@ -859,13 +809,6 @@ static int sony_camera_irq_deinit(struct sony_camera_data *camera_data,
 		if (rc < 0)
 			LOGE("unregist gpio irq: %s failed\n",
 				SONY_CAMERA_GPIO_IRQ_SOF);
-	}
-	if (camera_data->has_hw_ext_irq) {
-		rc = sony_camera_unregist_gpio_irq(camera_data,
-			SONY_CAMERA_GPIO_IRQ_EXTERNAL);
-		if (rc < 0)
-			LOGE("unregist gpio irq: %s failed\n",
-				SONY_CAMERA_GPIO_IRQ_EXTERNAL);
 	}
 	return rc;
 }
@@ -1270,95 +1213,6 @@ static int sony_camera_i2c_write(struct sony_camera_data *data,
 	return rc;
 }
 
-static int sony_camera_ext_i2c_read(struct sony_camera_data *data,
-	uint8_t slave_addr, uint32_t addr,
-	uint8_t type, int size, uint8_t *buf)
-{
-	int rc;
-	struct i2c_client *qup_client = data->qup_client;
-	uint8_t w_buf[4];
-	struct i2c_msg msg[2];
-	int i = 0;
-	if (!buf) {
-		LOGE("no memory\n");
-		return -ENOMEM;
-	}
-	if (type == 1) {
-		w_buf[0] = (uint8_t)addr;
-	} else if (type == 2) {
-		w_buf[0] = (uint8_t)(addr >> 8);
-		w_buf[1] = (uint8_t)(addr & 0xFF);
-	} else {
-		w_buf[0] = (uint8_t)(addr >> 24);
-		w_buf[1] = (uint8_t)(addr >> 16);
-		w_buf[2] = (uint8_t)(addr >> 8);
-		w_buf[3] = (uint8_t)(addr & 0xFF);
-	}
-	for (i = 0; i < size; i++) {
-		w_buf[type + i] = buf[i];
-	}
-
-	qup_client->addr = slave_addr;
-	msg[0].addr = (qup_client->addr) >> 1;
-	msg[0].flags = 0;
-	msg[0].buf = w_buf;
-	msg[0].len = type;
-
-	msg[1].addr = (qup_client->addr) >> 1;
-	msg[1].flags = I2C_M_RD;
-	msg[1].buf = buf;
-	msg[1].len = size;
-	rc = i2c_transfer(qup_client->adapter, msg, 2);
-	if (rc != 2) {
-		LOGE("i2c_transfer fail\n");
-		return -EFAULT;
-	}
-	return 0;
-}
-
-static int sony_camera_ext_i2c_write(struct sony_camera_data *data,
-	uint8_t slave_addr, uint32_t addr, uint8_t type,
-	int size, uint8_t *buf)
-{
-	int rc;
-	struct i2c_client *qup_client = data->qup_client;
-	uint8_t *w_buf;
-	struct i2c_msg msg[2];
-	int i = 0;
-	w_buf = kmalloc(size + type, GFP_KERNEL);
-	if (!w_buf) {
-		LOGE("no memory\n");
-		return -ENOMEM;
-	}
-	if (type == 1) {
-		w_buf[0] = (uint8_t)addr;
-	} else if (type == 2) {
-		w_buf[0] = (uint8_t)(addr >> 8);
-		w_buf[1] = (uint8_t)(addr & 0xFF);
-	} else {
-		w_buf[0] = (uint8_t)(addr >> 24);
-		w_buf[1] = (uint8_t)(addr >> 16);
-		w_buf[2] = (uint8_t)(addr >> 8);
-		w_buf[3] = (uint8_t)(addr & 0xFF);
-	}
-	for (i = 0; i < size; i++) {
-		w_buf[type + i] = buf[i];
-	}
-
-	qup_client->addr = slave_addr;
-	msg[0].addr = (qup_client->addr) >> 1;
-	msg[0].flags = 0;
-	msg[0].buf = w_buf;
-	msg[0].len = size + type;
-	rc = i2c_transfer(qup_client->adapter, msg, 1);
-	kfree(w_buf);
-	if (rc != 1) {
-		LOGE("i2c_transfer fail\n");
-		return -EFAULT;
-	}
-	return 0;
-}
-
 static int sony_camera_power_ctrl(struct sony_camera_data *data,
 	uint8_t on)
 {
@@ -1383,18 +1237,6 @@ static int sony_camera_power_ctrl(struct sony_camera_data *data,
 			LOGD("reset gpio %d->%d\n", gpio_reset->gpio, seq->val1);
 			rc = sony_camera_gpio_set(data, gpio_reset->gpio, seq->val1);
 			break;
-		case SONY_GPIO_VANA:
-		{
-			struct gpio *gpio_vana = sony_camera_get_gpio_pin(data,
-				SONY_CAMERA_GPIO_VANA);
-			if (!gpio_vana) {
-				rc = -EPERM;
-				break;
-			}
-			LOGD("vana gpio %d->%d\n", gpio_vana->gpio, seq->val1);
-			rc = sony_camera_gpio_set(data, gpio_vana->gpio, seq->val1);
-			break;
-		}
 		case SONY_CAM_VDIG:
 		case SONY_CAM_VIO:
 		case SONY_CAM_VANA:
@@ -1523,22 +1365,11 @@ static int sony_camera_match_sensor(uint32_t id)
 	uint16_t match_value = 0;
 	uint8_t match_len = 1;
 
-	if (!camera_info[id].match_id.enabled) {
-		LOGI("camera %d match skipped\n", id);
-		camera_data[id].module = &camera_info[id].modules[0];
-		goto exit;
-	}
-
 	match_len = camera_info[id].match_id.len;
-	if (camera_data[id].qup_client) {
-		rc = sony_camera_ext_i2c_read(&camera_data[id], camera_info[id].slave_addr,
-			camera_info[id].match_id.addr, 2, match_len, data);
-	} else {
-		rc = sony_camera_i2c_read(&camera_data[id], camera_info[id].slave_addr,
-			camera_info[id].match_id.addr, 2, match_len, data);
-	}
+	rc = sony_camera_i2c_read(&camera_data[id], camera_info[id].slave_addr,
+		camera_info[id].match_id.addr, 2, match_len, data);
 	if (rc < 0) {
-		LOGE("%s %d camera %d match failed %d match_addr=0x%x  match_value=0x%x read_value=0x%x 0x%x\n",
+		LOGE("%s %d camera %d match failed %d match_addr=0x%x  match_value=0x%x read_value=0x%x\n",
 			__func__, __LINE__, id, rc,
 			camera_info[id].match_id.addr, camera_info[id].match_id.expect_value,
 			data[0], data[1]);
@@ -1546,8 +1377,6 @@ static int sony_camera_match_sensor(uint32_t id)
 	} else {
 		if (match_len == 2) {
 			match_value = ((data[0] << 8) & 0xFF00) | (data[1] & 0x00FF);
-		} else if (camera_info[id].match_id.expect_value == 0) {
-			match_value = 0;
 		} else {
 			match_value = data[0] & 0x00FF;
 		}
@@ -1558,7 +1387,7 @@ static int sony_camera_match_sensor(uint32_t id)
 			id, camera_info[id].match_id.addr, camera_info[id].match_id.expect_value);
 		camera_data[id].module = &camera_info[id].modules[0];
 	} else {
-		LOGE("camera %d match failed match_addr=0x%x  match_value=0x%x read_value=0x%x 0x%x\n",
+		LOGE("camera %d match failed match_addr=0x%x  match_value=0x%x read_value=0x%x\n",
 			id, camera_info[id].match_id.addr, camera_info[id].match_id.expect_value, data[0], data[1]);
 		rc = -1;
 	}
@@ -1659,19 +1488,16 @@ static int sony_camera_power_down(struct sony_camera_data *data)
 	if (rc < 0)
 		LOGE("power_down fail\n");
 
-	if (data->has_hw_sof || data->has_hw_ext_irq) {
+	if (data->has_hw_sof) {
 		rc = sony_camera_irq_deinit(data,
 			&camera_info[data->id]);
 		if (rc < 0)
 			LOGE("%s: irq_deinit failed\n", __func__);
 	}
 
-	if (data->i2c_data) {
+	if (data->i2c_data)
 		kfree(data->i2c_data);
-		if (!data->use_qup) {
-			rc = sony_camera_cci_deinit(data);
-		}
-	}
+	rc = sony_camera_cci_deinit(data);
 	if (rc < 0)
 		LOGE("%s cci_deinit failed\n", __func__);
 
@@ -1725,23 +1551,22 @@ static int sony_camera_power_up(struct sony_camera_data *data)
 	LOGI("%s: id = %d, has_hw_sof %d %p\n", __func__,
 		data->id, data->has_hw_sof, dev_name(&data->p_dev->dev));
 
-	if (data->has_hw_sof || data->has_hw_ext_irq) {
+	if (data->has_hw_sof) {
 		rc = sony_camera_irq_init(data, &camera_info[data->id]);
 		if (rc < 0) {
 			LOGE("irq_init failed\n");
 			goto exit;
 		}
 	}
-	if (!data->use_qup) {
-		rc = sony_camera_cci_init(data);
-		if (rc < 0) {
-			LOGE("%s cci_init failed\n", __func__);
-			sony_camera_gpio_deinit(data);
-			pinctrl_select_state(data->pinctrl,
-				data->gpio_state_suspend);
-			sony_camera_cci_deinit(data);
-			goto exit;
-		}
+
+	rc = sony_camera_cci_init(data);
+	if (rc < 0) {
+		LOGE("%s cci_init failed\n", __func__);
+		sony_camera_gpio_deinit(data);
+		pinctrl_select_state(data->pinctrl,
+			data->gpio_state_suspend);
+		sony_camera_cci_deinit(data);
+		goto exit;
 	}
 
 	retry_cnt = SONY_CAMERA_MAX_RETRY_COUNT;
@@ -1898,16 +1723,10 @@ static long sony_camera_ioctl_common(struct file *file,
 				LOGE("%s: copy_from_user failed\n", __func__);
 				goto exit;
 			}
-			if (data->qup_client) {
-				rc = sony_camera_ext_i2c_read(data,
-					setting.slave_addr, setting.addr, setting.addr_type,
-					setting.len, setting.data);
-			} else {
-				// TODO: Remove later when qcom fix of i2c read for 256 byte/time
-				rc = sony_camera_i2c_read_byte(data,
-					setting.slave_addr, setting.addr, setting.addr_type,
-					setting.len, setting.data);
-			}
+			// TODO: Remove later when qcom fix of i2c read for 256 byte/time
+			rc = sony_camera_i2c_read_byte(data,
+				setting.slave_addr, setting.addr, setting.addr_type,
+				setting.len, setting.data);
 			if (rc < 0) {
 				LOGE("%s: sony_camera_i2c_read failed\n", __func__);
 				goto exit;
@@ -1927,15 +1746,9 @@ static long sony_camera_ioctl_common(struct file *file,
 			}
 			LOGD("sensor I2C write slave_addr=%x addr=%x len=%d\n",
 				setting.slave_addr, setting.addr, setting.len);
-			if (data->qup_client) {
-				rc = sony_camera_ext_i2c_write(data,
-					setting.slave_addr, setting.addr, setting.addr_type,
-					setting.len, setting.data);
-			} else {
-				rc = sony_camera_i2c_write(data,
-					setting.slave_addr, setting.addr, setting.addr_type,
-					setting.len, setting.data);
-			}
+			rc = sony_camera_i2c_write(data,
+				setting.slave_addr, setting.addr, setting.addr_type,
+				setting.len, setting.data);
 			break;
 		case SONY_CAMERA_CMD_SET_THERMAL:
 			mutex_lock(&data->thermal_lock);
@@ -2071,16 +1884,6 @@ static const struct of_device_id sony_camera_4_dt_match[] = {
 	},
 	{
 	},
-
-};
-
-static const struct of_device_id sony_camera_5_dt_match[] = {
-	{
-		.compatible = "sony_camera_5",
-		.data = &camera_data[5]
-	},
-	{
-	},
 };
 
 static const struct of_device_id sony_camera_spi_dt_match[] = {
@@ -2095,7 +1898,6 @@ MODULE_DEVICE_TABLE(of, sony_camera_1_dt_match);
 MODULE_DEVICE_TABLE(of, sony_camera_2_dt_match);
 MODULE_DEVICE_TABLE(of, sony_camera_3_dt_match);
 MODULE_DEVICE_TABLE(of, sony_camera_4_dt_match);
-MODULE_DEVICE_TABLE(of, sony_camera_5_dt_match);
 
 static struct platform_driver sony_camera_platform_driver[] = {
 	{
@@ -2133,60 +1935,6 @@ static struct platform_driver sony_camera_platform_driver[] = {
 			.of_match_table = sony_camera_4_dt_match,
 		},
 	},
-	{
-		.driver = {
-			.name = "sony_camera_5",
-			.owner = THIS_MODULE,
-			.of_match_table = sony_camera_5_dt_match,
-		},
-	},
-};
-
-static int sony_camera_ext_i2c_probe(struct i2c_client *qup_client,
-	const struct i2c_device_id *id)
-{
-	int rc = 0;
-	if (!i2c_check_functionality(qup_client->adapter, I2C_FUNC_I2C)) {
-		LOGE("%s:%d check functionality failed\n",
-			__func__, __LINE__);
-		rc = -EIO;
-		goto fail;
-	}
-	ext_cam_client = qup_client;
-	return 0;
-fail:
-	return rc;
-}
-
-static int sony_camera_ext_i2c_remove(struct i2c_client *qup_client)
-{
-	i2c_set_clientdata(qup_client, NULL);
-	return 0;
-}
-
-static const struct i2c_device_id ext_cam_id[] = {
-	{ "external_camera", 0 },
-	{ }
-};
-
-MODULE_DEVICE_TABLE(i2c, ext_cam_id);
-
-static const struct of_device_id ext_cam_i2c_dt_match[] = {
-	{
-		.compatible = "ext_cam_i2c"
-	},
-	{ },
-};
-
-static struct i2c_driver ext_cam_i2c_driver = {
-	.driver = {
-		.name = "external_camera",
-		.owner = THIS_MODULE,
-		.of_match_table = of_match_ptr(ext_cam_i2c_dt_match),
-	},
-	.probe = sony_camera_ext_i2c_probe,
-	.id_table = ext_cam_id,
-	.remove = sony_camera_ext_i2c_remove,
 };
 
 static void sony_camera_platform_cleanup(void)
@@ -2227,10 +1975,6 @@ static int sony_camera_platform_probe(struct platform_device *p_dev)
 		match = of_match_device(sony_camera_4_dt_match, &p_dev->dev);
 		id = 4;
 	}
-	if (!match && sensor_num > 5) {
-		match = of_match_device(sony_camera_5_dt_match, &p_dev->dev);
-		id = 5;
-	}
 	if (!match) {
 		LOGE("of_match_device fail\n");
 		rc = -EFAULT;
@@ -2254,18 +1998,14 @@ static int sony_camera_platform_probe(struct platform_device *p_dev)
 			__func__, __LINE__);
 		goto fail;
 	}
-	if (!camera_data[id].use_qup) {
-		// CCI initialize
-		camera_data[id].cci_info.cci_subdev = cam_cci_get_subdev(camera_data[id].cci_info.cci_device);
-		camera_data[id].cci_info.i2c_freq_mode = camera_info[id].modules[0].i2c_freq_mode;
-		camera_data[id].cci_info.sid = 0;
-		camera_data[id].cci_info.cid = 0;
-		camera_data[id].cci_info.timeout = 0;
-		camera_data[id].cci_info.retries = 3;
-		camera_data[id].cci_info.id_map = 0;
-	} else {
-		camera_data[id].qup_client = ext_cam_client;
-	}
+	// CCI initialize
+	camera_data[id].cci_info.cci_subdev = cam_cci_get_subdev(camera_data[id].cci_info.cci_device);
+	camera_data[id].cci_info.i2c_freq_mode = camera_info[id].modules[0].i2c_freq_mode;
+	camera_data[id].cci_info.sid = 0;
+	camera_data[id].cci_info.cid = 0;
+	camera_data[id].cci_info.timeout = 0;
+	camera_data[id].cci_info.retries = 3;
+	camera_data[id].cci_info.id_map = 0;
 	camera_data[id].pinctrl = devm_pinctrl_get(&p_dev->dev);
 	if (IS_ERR_OR_NULL(camera_data[id].pinctrl)) {
 		LOGE("%s:%d Getting pinctrl handle failed\n",
@@ -2348,7 +2088,6 @@ static int __init sony_camera_init_module(void)
 	uint16_t probe_count = 0;
 
 	sensor_num = ARRAY_SIZE(sony_camera_platform_driver);
-	i2c_add_driver(&ext_cam_i2c_driver);
 
 	for (i = 0; i < sensor_num; i++) {
 		camera_data[i].state = SONY_CAMERA_STATE_POWER_DOWN;
@@ -2471,7 +2210,7 @@ static int sony_camera_set_power(struct sony_camera_data *data,
 	} else {
 		rc = sony_camera_vreg_set(data,
 			cmd, 0xFFFFFFFF, 0);
-	}
+    }
 	if (rc >= 0) {
 		switch(cmd) {
 		case SONY_CAM_VDIG:

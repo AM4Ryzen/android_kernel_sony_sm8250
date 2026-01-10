@@ -3,7 +3,7 @@
  * color temperature (in kelvin) within the AMS-TAOS TCS family of devices.
  *
  * Copyright (c) 2016, AMS-TAOS USA, Inc.
- * Copyright 2021 Sony Corporation
+ * Copyright (C) 2017 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -793,7 +793,7 @@ static ssize_t tcs3490_chip_pow_store(struct device *dev,
 		__func__, value ? "TRUE" : "FALSE");
 
 	if (value) {
-		if (!rc)
+		if (!rc && chip->unpowered)
 			tcs3490_power_on(chip);
 		if (!rc && chip->pinctrl && chip->gpio_state_active) {
 			rc = pinctrl_select_state(chip->pinctrl,
@@ -1295,12 +1295,10 @@ static int tcs3490_pltf_power_on(struct tcs3490_chip *chip)
 	int rc = 0;
 
 	mutex_lock(&chip->lock);
-	if (chip->unpowered) {
-		if (chip->vdd_supply_enable)
-			rc = regulator_enable(chip->vdd);
-		else if (chip->gpio_vdd_enable)
-			rc = regulator_enable(chip->gpio_vdd);
-	}
+	if (chip->vdd_supply_enable)
+		rc = regulator_enable(chip->vdd);
+	else if (chip->gpio_vdd_enable)
+		rc = regulator_enable(chip->gpio_vdd);
 	if (rc) {
 		dev_err(&chip->client->dev,
 			"Regulator vdd enable failed rc=%d\n", rc);

@@ -24,7 +24,7 @@
 static struct timer_list forcecrash_timer;
 
 #define PKEY_FORCECRASH_DEV_NAME "powerkey_forcecrash"
-static struct wakeup_source *powerkey_lock;
+static struct wakeup_source powerkey_lock;
 
 static int forcecrash_on;
 module_param(forcecrash_on, int, S_IRUGO | S_IWUSR);
@@ -43,11 +43,11 @@ static void forcecrash_timer_setup(bool key_pressed)
 		pr_debug("Power key pressed..\n");
 		mod_timer(&forcecrash_timer,
 				jiffies + FORCE_CRASH_TIMEOUT * HZ);
-		__pm_stay_awake(powerkey_lock);
+		__pm_stay_awake(&powerkey_lock);
 	} else {
 		pr_debug("released.\n");
 		del_timer(&forcecrash_timer);
-		__pm_relax(powerkey_lock);
+		__pm_relax(&powerkey_lock);
 	}
 }
 
@@ -145,14 +145,15 @@ static struct input_handler powerkey_input_handler = {
 static int __init powerkey_forcecrash_init(void)
 {
 	timer_setup(&forcecrash_timer, forcecrash_timeout, 0);
-	powerkey_lock = wakeup_source_register(NULL, PKEY_FORCECRASH_DEV_NAME);
+	wakeup_source_init(&powerkey_lock,
+			PKEY_FORCECRASH_DEV_NAME);
 	return input_register_handler(&powerkey_input_handler);
 }
 
 static void __exit powerkey_forcecrash_exit(void)
 {
 	del_timer(&forcecrash_timer);
-	wakeup_source_unregister(powerkey_lock);
+	wakeup_source_trash(&powerkey_lock);
 	input_unregister_handler(&powerkey_input_handler);
 }
 

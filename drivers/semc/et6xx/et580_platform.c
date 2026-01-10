@@ -428,7 +428,6 @@ static void egis_power_onoff(struct egis_data *egis, int power_onoff)
 		pinctrl_action(egis->pd, "egistec,et580", "et6xx_ldo_high");//LDO Enable
 		msleep(10);
 		pinctrl_action(egis->pd, "egistec,et580", "et6xx_reset_active");
-		pinctrl_action(egis->pd, "egistec,et580", "et6xx_irq_active");
 
 	} else if (power_onoff == 2) {
 
@@ -436,11 +435,9 @@ static void egis_power_onoff(struct egis_data *egis, int power_onoff)
 		pinctrl_action(egis->pd, "egistec,et580", "et6xx_ldo_high");//LDO Enable
 		msleep(10);
 		pinctrl_action(egis->pd, "egistec,et580", "et6xx_reset_active");
-		pinctrl_action(egis->pd, "egistec,et580", "et6xx_irq_active");
 
 	} else {
 
-		pinctrl_action(egis->pd, "egistec,et580", "et6xx_irq_low");
 		pinctrl_action(egis->pd, "egistec,et580", "et6xx_reset_reset");
 		pinctrl_action(egis->pd, "egistec,et580", "et6xx_ldo_low");//LDO Disable
 		vreg_setup(egis, "et6xx_vcc_spi_BoB", true, false);//Vreg-BoB = 3.35V
@@ -767,9 +764,11 @@ static int egis_probe(struct platform_device *pdev)
 
 	pr_debug("[egis] %s: initialize success %d\n", __func__, status);
 
+	vreg_setup(egis, "et6xx_vcc_spi_BoB", true, false);//Vreg-BoB = 3.35V
+	pinctrl_action(egis->pd, "egistec,et580", "et6xx_ldo_high");//LDO Enable
 	pinctrl_action(egis->pd, "egistec,et580", "et6xx_irq_active");
 
-	egis_power_onoff(egis, 0);  // 1 = on, 0 = off.
+	egis_reset(egis);
 	request_irq_done = 0;
 
 	return status;

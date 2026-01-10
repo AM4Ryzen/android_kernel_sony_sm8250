@@ -10,7 +10,7 @@
  * and licensed under the license of the file.
  */
 
-#include <linux/proc_fs.h>
+#include <linux/debugfs.h>
 #include <linux/errno.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
@@ -27,7 +27,7 @@
 static void __iomem *last_logs_virt_iobase;
 static unsigned long last_logs_size;
 
-struct proc_dir_entry *procfs_entry;
+struct dentry *debugfs_entry;
 
 static ssize_t last_logs_read(struct file *file, char __user *buf,
 	size_t len, loff_t *offp)
@@ -41,7 +41,7 @@ static ssize_t last_logs_read(struct file *file, char __user *buf,
 
 static int last_logs_open(struct inode *inode, struct file *file)
 {
-	file->private_data = PDE_DATA(inode);
+	file->private_data = inode->i_private;
 	return 0;
 }
 
@@ -89,11 +89,11 @@ static int last_logs_init_resource(struct platform_device *pdev,
 	priv_data->addr = last_logs_addr;
 	priv_data->size = debug_resource_size;
 
-	if (procfs_entry) {
-		priv_data->procfs_file = proc_create_data(region->name,
-			S_IFREG | S_IRUGO, procfs_entry, &last_logs_fops,
-				priv_data);
-		if (!priv_data->procfs_file) {
+	if (debugfs_entry) {
+		priv_data->debugfs_file = debugfs_create_file(region->name,
+			S_IFREG | S_IRUGO, debugfs_entry, priv_data,
+				&last_logs_fops);
+		if (!priv_data->debugfs_file) {
 			dev_err(&pdev->dev,
 				"%s: Failed to create debug file entry %s\n",
 				__func__, region->name);
@@ -156,9 +156,9 @@ static int last_logs_probe(struct platform_device *pdev)
 	if (last_logs_hdr.num_regions > MAX_LAST_LOGS_REGIONS)
 		goto exit;
 
-	if (!procfs_entry) {
-		procfs_entry = proc_mkdir("last_logs", NULL);
-		if (!procfs_entry) {
+	if (!debugfs_entry) {
+		debugfs_entry = debugfs_create_dir("last_logs", NULL);
+		if (!debugfs_entry) {
 			dev_err(&pdev->dev,
 				"%s: Failed to create last_logs dir\n",
 				__func__);

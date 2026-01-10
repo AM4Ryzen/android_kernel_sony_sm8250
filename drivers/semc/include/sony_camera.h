@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note */
 /*
- * Copyright 2021 Sony Corporation
+ * Copyright (C) 2019 Sony Mobile Communications Inc.
  */
 
 #ifndef __LINUX_SONY_CAMERA_H
@@ -28,7 +28,6 @@
 
 #define SONY_CAMERA_EVT_BASE           (0x20000)
 #define SONY_CAMERA_EVT_SOF            (SONY_CAMERA_EVT_BASE + 0)
-#define SONY_CAMERA_EVT_EXTERNAL       (SONY_CAMERA_EVT_BASE + 1)
 
 enum sony_camera_i2c_freq_mode {
 	SONY_CAMERA_I2C_FREQ_MODE_STAND,
@@ -57,7 +56,6 @@ enum sony_camera_cmd {
 	SONY_I2C_WRITE   =  7,
 	SONY_CAM_GYRO    =  8,
 	SONY_MIPI_SWITCH =  9,
-	SONY_GPIO_VANA   = 10,
 	SONY_CAM_VDIG2   = 20,
 	SONY_CAM_PMIC0   = 40,
 	SONY_CAM_PMIC1   = 41,
