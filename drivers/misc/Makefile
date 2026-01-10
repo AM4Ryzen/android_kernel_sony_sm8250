@@ -74,3 +74,5 @@ obj-$(CONFIG_OKL4_LINK_SHBUF)    += okl4-link-shbuf.o
 obj-$(CONFIG_WIGIG_SENSING_SPI)	+= wigig_sensing.o
 obj-$(CONFIG_QTI_XR_SMRTVWR_MISC) += qxr-stdalonevwr.o
 
+obj-$(CONFIG_MMTUNER_MN8855x)   += mm_tuner/
+obj-$(CONFIG_SONY_EXT_UIM_CTRL)  += sony_ext_uim_ctrl.o

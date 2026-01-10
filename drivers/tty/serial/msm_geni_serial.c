@@ -1,3 +1,8 @@
+/*
+ * NOTE: This file has been modified by Sony Mobile Communications Inc.
+ * Modifications are Copyright (c) 2018 Sony Mobile Communications Inc,
+ * and licensed under the license of the file.
+ */
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
@@ -2110,6 +2115,9 @@ static void msm_geni_serial_set_termios(struct uart_port *uport,
 		geni_write_reg_nolog(0x21, uport->membase, GENI_SER_S_CLK_CFG);
 		geni_read_reg_nolog(uport->membase, GENI_SER_M_CLK_CFG);
 	}
+
+	if (!termios->c_cflag)
+		return;
 
 	if (!uart_console(uport)) {
 		int ret = msm_geni_serial_power_on(uport);

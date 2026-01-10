@@ -10,6 +10,11 @@
  *      (at your option) any later version.
  *
  */
+/*
+ * NOTE: This file has been modified by Sony Mobile Communications Inc.
+ * Modifications are Copyright (c) 2019 Sony Mobile Communications Inc,
+ * and licensed under the license of the file.
+ */
 
 #include <linux/atomic.h>
 #include <linux/kernel.h>
@@ -38,6 +43,15 @@ unsigned int uvc_no_drop_param;
 static unsigned int uvc_quirks_param = -1;
 unsigned int uvc_trace_param;
 unsigned int uvc_timeout_param = UVC_CTRL_STREAMING_TIMEOUT;
+#ifdef CONFIG_SOMC_UVC_EXTENSION
+unsigned int uvc_urbs_bulk_param = 800;
+unsigned int uvc_urbs_isoc_param = 5;
+unsigned int uvc_specify_cpu = 4;
+#else
+unsigned int uvc_urbs_bulk_param = 76;
+unsigned int uvc_urbs_isoc_param = 5;
+#endif
+unsigned int uvc_maxpackets_param = 64;
 
 /* ------------------------------------------------------------------------
  * Video formats
@@ -1457,6 +1471,11 @@ static int uvc_scan_chain_forward(struct uvc_video_chain *chain,
 			break;
 		if (forward == prev)
 			continue;
+		if (forward->chain.next || forward->chain.prev) {
+			uvc_trace(UVC_TRACE_DESCR, "Found reference to "
+				"entity %d already in chain.\n", forward->id);
+			return -EINVAL;
+		}
 
 		switch (UVC_ENTITY_TYPE(forward)) {
 		case UVC_VC_EXTENSION_UNIT:
@@ -1536,6 +1555,13 @@ static int uvc_scan_chain_backward(struct uvc_video_chain *chain,
 					"input %d isn't connected to an "
 					"input terminal\n", entity->id, i);
 				return -1;
+			}
+
+			if (term->chain.next || term->chain.prev) {
+				uvc_trace(UVC_TRACE_DESCR, "Found reference to "
+					"entity %d already in chain.\n",
+					term->id);
+				return -EINVAL;
 			}
 
 			if (uvc_trace_param & UVC_TRACE_PROBE)
@@ -2332,7 +2358,16 @@ module_param_named(trace, uvc_trace_param, uint, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(trace, "Trace level bitmask");
 module_param_named(timeout, uvc_timeout_param, uint, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(timeout, "Streaming control requests timeout");
-
+module_param_named(urbs_bulk, uvc_urbs_bulk_param, uint, S_IRUGO|S_IWUSR);
+MODULE_PARM_DESC(urbs_bulk, "URBs for bulk transfer");
+module_param_named(urbs_isoc, uvc_urbs_isoc_param, uint, S_IRUGO|S_IWUSR);
+MODULE_PARM_DESC(urbs_isoc, "URBs for isochronous transfer");
+module_param_named(maxpackets, uvc_maxpackets_param, uint, S_IRUGO|S_IWUSR);
+MODULE_PARM_DESC(maxpackets, "Max Packets");
+#ifdef CONFIG_SOMC_UVC_EXTENSION
+module_param_named(specify_cpu, uvc_specify_cpu, uint, 0644);
+MODULE_PARM_DESC(specify_cpu, "Specify CPU# on worker");
+#endif
 /* ------------------------------------------------------------------------
  * Driver initialization and cleanup
  */

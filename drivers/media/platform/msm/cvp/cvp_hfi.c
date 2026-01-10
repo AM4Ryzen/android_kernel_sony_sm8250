@@ -1,3 +1,8 @@
+/*
+ * NOTE: This file has been modified by Sony Mobile Communications Inc.
+ * Modifications are Copyright (c) 2019 Sony Mobile Communications Inc,
+ * and licensed under the license of the file.
+ */
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
@@ -2750,6 +2755,15 @@ static int __check_core_registered(struct iris_hfi_device *device,
 	return -EINVAL;
 }
 
+static void cvpss_hfi_crash_reason(struct cvp_hfi_sfr_struct *vsfr)
+{
+	char msg[SUBSYS_CRASH_REASON_LEN];
+
+	snprintf(msg, sizeof(msg), "SFR Message from FW : %s",
+						vsfr->rg_data);
+	subsystem_crash_reason("cvpss", msg);
+}
+
 static void __process_fatal_error(
 		struct iris_hfi_device *device)
 {
@@ -2783,6 +2797,7 @@ static void iris_hfi_pm_handler(struct work_struct *work)
 	int rc = 0;
 	struct msm_cvp_core *core;
 	struct iris_hfi_device *device;
+	char msg[SUBSYS_CRASH_REASON_LEN];
 
 	core = list_first_entry(&cvp_driver->cores, struct msm_cvp_core, list);
 	if (core)
@@ -2805,6 +2820,9 @@ static void iris_hfi_pm_handler(struct work_struct *work)
 		dprintk(CVP_WARN, "Failed to PC for %d times\n",
 				device->skip_pc_count);
 		device->skip_pc_count = 0;
+		snprintf(msg, sizeof(msg),
+			"Failed to PC %d times\n", device->skip_pc_count);
+		subsystem_crash_reason("cvpss", msg);
 		__process_fatal_error(device);
 		return;
 	}
@@ -2957,6 +2975,7 @@ static void print_sfr_message(struct iris_hfi_device *device)
 
 		dprintk(CVP_ERR, "SFR Message from FW: %s\n",
 				vsfr->rg_data);
+		cvpss_hfi_crash_reason(vsfr);
 	}
 }
 
@@ -3210,8 +3229,6 @@ static int __response_handler(struct iris_hfi_device *device)
 				.device_id = device->device_id,
 			}
 		};
-
-		print_sfr_message(device);
 
 		if (device->intr_status & CVP_WRAPPER_INTR_MASK_CPU_NOC_BMSK)
 			dprintk(CVP_ERR, "Received Xtensa NOC error\n");
