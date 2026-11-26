@@ -3578,8 +3578,15 @@ static void _sde_plane_install_properties(struct drm_plane *plane,
 	if (psde->features & BIT(SDE_SSPP_TRUE_INLINE_ROT)) {
 		const struct sde_format_extended *inline_rot_fmt_list;
 
+		/*
+		 * Older (Android 10) libsdedrm only recognises inline rotation
+		 * v1 when this reads exactly 1; it treats 0x100 as "none" and
+		 * then puts 90-degree layers (camera preview) on a pipe
+		 * unrotated. Newer userspace accepts both 0x1 and 0x100.
+		 */
 		sde_kms_info_add_keyint(info, "true_inline_rot_rev",
-			 catalog->true_inline_rot_rev);
+			IS_SDE_INLINE_ROT_REV_100(catalog->true_inline_rot_rev) ?
+			1 : catalog->true_inline_rot_rev);
 		sde_kms_info_add_keyint(info,
 			"true_inline_dwnscale_rt",
 			(int) (psde->pipe_sblk->in_rot_maxdwnscale_rt_num /
