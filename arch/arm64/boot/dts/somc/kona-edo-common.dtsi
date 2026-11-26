@@ -242,7 +242,9 @@
 		pinctrl-1 = <&sm_gpio_74_output_high>;
 		pinctrl-2 = <&pm8150l_gpio_8>;
 		pinctrl-3 = <&pm8150l_gpio_8_output_high>;
-		pinctrl-4 = <&sm_gpio_23>;
+		/* FP finger-detect IRQ must not be pulled up (it reads as always
+		 * triggered); same no-pull state the newer edo DT uses. */
+		pinctrl-4 = <&sm_gpio_23_input_no_pull>;
 		/* Add Vreg-BoB control */
 		regulator-name = "et6xx_vcc_spi_BoB";
 		et6xx_vcc_spi_BoB-supply = <&pm8150a_bob>;
@@ -2082,7 +2084,22 @@
 		config {
 			pins = "gpio23";
 			drive-strength = <2>;
-			bias-pull-up;
+			/* FP IRQ: no pull, or it reads as a finger (see et6xx) */
+			bias-disable;
+			input-enable;
+		};
+	};
+
+	sm_gpio_23_input_no_pull: sm_gpio_23_input_no_pull {
+		mux {
+			pins = "gpio23";
+			function = "gpio";
+		};
+
+		config {
+			pins = "gpio23";
+			drive-strength = <2>;
+			bias-disable;
 			input-enable;
 		};
 	};
