@@ -1,11 +1,9 @@
-ifeq (,$(filter edo, $(SOMC_TARGET_PLATFORM)))
+# Stock Sony builds pick these via $(SOMC_TARGET_PLATFORM), which a Lineage
+# build never sets. On this 4.19 kernel:
+#  - setup_timer() no longer exists, so the timer_setup() path is required.
+#  - navi_input.c (fingerprint swipe gestures) is never called from
+#    et580_platform.c and does not build against the new timer API.
 ccflags-y += -DCONFIG_ET580_USE_TIMER_SETUP
-endif
 
 obj-y := et580-int.o
-
-ifeq (,$(filter edo, $(SOMC_TARGET_PLATFORM)))
 et580-int-objs := et580_platform.o
-else
-et580-int-objs := et580_platform.o navi_input.o
-endif
