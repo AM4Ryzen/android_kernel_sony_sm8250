@@ -4455,11 +4455,6 @@
 };
 
 &sdhc_2 {
-	com,clk-rates = <400000 20000000 25000000
-					50000000 100000000 201500000>;
-	qcom,bus-speed-mode = "SDR12", "SDR25", "SDR50", "DDR50",
-				      "SDR104";
-
 	extcon = <0>;
 	cd-gpios = <&tlmm 77 GPIO_ACTIVE_HIGH>;
 };
