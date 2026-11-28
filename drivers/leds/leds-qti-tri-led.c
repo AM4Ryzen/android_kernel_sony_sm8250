@@ -562,12 +562,17 @@ static ssize_t rgbled_lut_pwm_store(struct device *dev,
 		ret = 1;
 	}
 
-	led->pwm_setting.ramp_config.pattern_length = ret;
-	if (led->pwm_setting.ramp_config.pattern == 0)
-		led->pwm_setting.ramp_config.pattern = devm_kzalloc(dev,
-			sizeof(*led->pwm_setting.ramp_config.pattern) *
-			led->pwm_setting.ramp_config.pattern_length,
+	/* Always allocate room for the longest pattern; a later, longer write
+	 * must not overflow a buffer sized for an earlier, shorter one. */
+	if (!led->pwm_setting.ramp_config.pattern)
+		led->pwm_setting.ramp_config.pattern = devm_kcalloc(dev,
+			MAX_DUTY_PATTERN,
+			sizeof(*led->pwm_setting.ramp_config.pattern),
 			GFP_KERNEL);
+	if (!led->pwm_setting.ramp_config.pattern)
+		return -ENOMEM;
+
+	led->pwm_setting.ramp_config.pattern_length = ret;
 	if (led->pwm_setting.ramp_config.pattern_length > 0) {
 		led->led_setting.blink = true;
 		led->pwm_setting.ramp_config.lo_idx =
@@ -581,6 +586,7 @@ static ssize_t rgbled_lut_pwm_store(struct device *dev,
 		led->pwm_setting.ramp_config.pattern_repeat = true;
 		led->pwm_setting.ramp_config.toggle = false;
 		memcpy(led->pwm_setting.ramp_config.pattern, lut,
+			sizeof(*led->pwm_setting.ramp_config.pattern) *
 			led->pwm_setting.ramp_config.pattern_length);
 	}
 
@@ -596,9 +602,13 @@ static ssize_t rgbled_lut_pwm_show(struct device *dev,
 
 	led = container_of(led_cdev, struct qpnp_led_dev, cdev);
 	lut = led->pwm_setting.ramp_config.pattern;
+	/* No pattern until the first write (and after turn-off frees it). */
+	if (!lut)
+		return scnprintf(buf, PAGE_SIZE, "len:0\n");
 
 	return scnprintf(buf, PAGE_SIZE, "len:%u,[0]:%d,[1]:%d\n",
-		led->pwm_setting.ramp_config.pattern_length, lut[0], lut[1]);
+		led->pwm_setting.ramp_config.pattern_length, lut[0],
+		led->pwm_setting.ramp_config.pattern_length > 1 ? lut[1] : 0);
 }
 
 static ssize_t rgbled_step_duration_store(struct device *dev,
